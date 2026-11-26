@@ -74,6 +74,9 @@ summary { cursor: pointer; color: var(--muted); }
   border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -3px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .list { display: grid; gap: 12px; }
+.topic { margin-bottom: 28px; }
+.topic h2 { margin-bottom: 4px; }
+.topic > p { margin: 0 0 10px; }
 .list a.card { display: block; color: inherit; text-decoration: none; padding: 16px 18px; }
 .list a.card:hover { border-color: var(--accent); }
 .list .t { font-weight: 600; }
@@ -105,6 +108,7 @@ const OFFLINE = !!EMBEDDED;
 const SERVER_URL = "http://localhost:8765";
 const $app = document.getElementById("app");
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const keyPath = k => String(k).split("/").map(encodeURIComponent).join("/"); // "topic/slug" -> URL path
 const shuffle = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 
 async function api(path, body) {
@@ -119,14 +123,23 @@ async function renderIndex() {
   document.title = "Study Quiz";
   let data;
   try { data = await api("/api/quizzes"); } catch (e) { $app.innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
-  const items = data.quizzes.map(q => `
-    <a class="card" href="/quiz/${encodeURIComponent(q.slug)}">
+  const card = q => `
+    <a class="card" href="/quiz/${keyPath(q.slug)}">
       <div class="t">${esc(q.title)}</div>
-      <div class="small muted">${q.mc} multiple choice · ${q.open} open · ${q.attempts} attempts${q.created ? " · " + esc(q.created) : ""}</div>
-    </a>`).join("");
+      <div class="small muted">${q.mc} multiple choice · ${q.open} open · ${q.attempts} attempt${q.attempts === 1 ? "" : "s"}${q.created ? " · " + esc(q.created) : ""}</div>
+    </a>`;
+  // Group quizzes by topic; topics with no quizzes yet are still listed.
+  const sections = data.topics.map(t => {
+    const qs = data.quizzes.filter(q => q.topic === t.topic);
+    return `<section class="topic"><h2>${esc(t.title)}</h2>${t.description ? `<p class="small muted">${esc(t.description)}</p>` : ""}
+      <div class="list">${qs.map(card).join("") || `<p class="small muted">No quizzes yet.</p>`}</div></section>`;
+  });
+  const loose = data.quizzes.filter(q => !q.topic);
+  if (loose.length) sections.push(`<section class="topic"><h2>Other</h2><div class="list">${loose.map(card).join("")}</div></section>`);
+  const items = sections.join("");
   $app.innerHTML = `
-    <header class="top"><h1>Study Quiz</h1><span class="small muted">${esc(data.workspace)}</span></header>
-    ${items ? `<div class="list">${items}</div>` :
+    <header class="top"><h1>Study Quiz${data.group ? ` <span class="tag">${esc(data.group)}</span>` : ""}</h1><span class="small muted">${esc(data.workspace)}</span></header>
+    ${items ? items :
       `<div class="card"><h2>No quizzes yet</h2><p class="muted">In Claude Code, run <code>/study-quiz:quiz &lt;topic or notes file&gt;</code> to generate one.</p></div>`}`;
 }
 
@@ -134,7 +147,7 @@ async function renderIndex() {
 const S = { quiz: null, order: [], i: 0, results: {} }; // results[qid] = {status: ok|partial|bad, ...}
 
 async function renderQuizPage(slug) {
-  try { S.quiz = await api(`/api/quiz/${encodeURIComponent(slug)}`); }
+  try { S.quiz = await api(`/api/quiz/${keyPath(slug)}`); }
   catch (e) { $app.innerHTML = `<p class="err">${esc(e.message)}</p><p><a href="/">← all quizzes</a></p>`; return; }
   document.title = `${S.quiz.title} · Study Quiz`;
   start(S.quiz.questions);
@@ -150,7 +163,7 @@ function start(questions) {
 function shell(inner) {
   const n = S.order.length, pct = n ? (S.i / n) * 100 : 0;
   $app.innerHTML = `
-    <header class="top"><h1>${esc(S.quiz.title)}</h1>${OFFLINE ? "" : `<a href="/">All quizzes</a>`}</header>
+    <header class="top"><div>${S.quiz.topic_title ? `<div class="small muted">${esc(S.quiz.topic_title)}</div>` : ""}<h1>${esc(S.quiz.title)}</h1></div>${OFFLINE ? "" : `<a href="/">All quizzes</a>`}</header>
     <div class="progress" aria-hidden="true"><i style="width:${pct}%"></i></div>
     ${inner}`;
 }
@@ -290,7 +303,7 @@ document.addEventListener("keydown", e => {
 
 if (EMBEDDED) { S.quiz = EMBEDDED; document.title = `${S.quiz.title} · Study Quiz`; start(S.quiz.questions); }
 else {
-  const m = location.pathname.match(/^\/quiz\/([^/]+)\/?$/);
+  const m = location.pathname.match(/^\/quiz\/([^/]+(?:\/[^/]+)?)\/?$/);
   m ? renderQuizPage(decodeURIComponent(m[1])) : renderIndex();
 }
 </script>

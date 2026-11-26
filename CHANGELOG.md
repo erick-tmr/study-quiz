@@ -3,6 +3,22 @@
 All notable changes to this plugin are documented here. Versions follow
 [semver](https://semver.org/); the version lives in `.claude-plugin/plugin.json`.
 
+## [0.3.0] - 2026-11-26
+
+### Added
+- Topics inside study groups: `<group>/<topic>/<quiz>/`, quiz keys `topic/quiz`,
+  `topic.json` metadata, `sq.py topic [new|set]`, index and page grouped by topic.
+  Legacy flat quizzes still load (listed under "Other").
+- Creating a study group asks: git? GitHub repo? public or private? name?
+  `sq.py init-repo --github OWNER/NAME --visibility public|private` creates the
+  repo with `gh` and pushes.
+- Study groups: one workspace (and optional git repo) per subject. `sq.py group
+  [new|use|none] NAME`, skill commands `group <name>` / `groups` / `group none`.
+- Per-group git preference (asked once per group).
+- `sq.py status` JSON summary used by the skill.
+- Server follows the active group live when started without `--workspace`;
+  `/api/health` reports `group` and `follows_active_group`.
+
 ## [0.2.0] - 2026-11-26
 
 ### Added

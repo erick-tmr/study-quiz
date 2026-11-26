@@ -10,7 +10,9 @@ Standard library only. Binds to 127.0.0.1.
     python3 server.py [--port 8765] [--workspace ~/study-quizzes]
 
 Environment / config (see common.py):
-    STUDY_QUIZ_DIR           quiz workspace (else config "workspace", else ~/study-quizzes)
+    STUDY_QUIZ_DIR           quiz workspace (else the active study group, else config
+                             "workspace", else ~/study-quizzes). Without --workspace or
+                             STUDY_QUIZ_DIR the server follows the active group live.
     STUDY_QUIZ_GRADER_MODEL  model alias for grading (default: sonnet)
     STUDY_QUIZ_CLAUDE        path to the claude binary (default: claude on PATH)
 """
@@ -29,7 +31,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import common
-from common import PLUGIN_ROOT, SLUG_RE, TEMPLATE
+from urllib.parse import unquote
+
+from common import PLUGIN_ROOT, TEMPLATE
 
 SCHEMA = (common.APP_DIR / "grade.schema.json").read_text()
 QID_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
@@ -44,9 +48,14 @@ def now_iso() -> str:
 
 
 class Config:
-    workspace: Path
+    fixed_workspace: Path | None = None
     model: str
     claude_bin: str | None
+
+    @property
+    def workspace(self) -> Path:
+        # Re-resolved per request so `sq.py group use X` takes effect without a restart.
+        return self.fixed_workspace or common.workspace()
 
 
 CFG = Config()
@@ -54,15 +63,18 @@ CFG = Config()
 
 # --------------------------------------------------------------------------- data
 
-def quiz_dir(slug: str) -> Path | None:
-    if not SLUG_RE.match(slug):
-        return None
-    d = CFG.workspace / slug
-    return d if (d / "quiz.json").is_file() else None
+# A quiz is addressed by its key: "<topic>/<slug>" (or a legacy flat "<slug>").
+
+def quiz_dir(key: str) -> Path | None:
+    return common.quiz_dir(CFG.workspace, key)
 
 
-def load_quiz(slug: str) -> dict | None:
-    return common.load_quiz(CFG.workspace, slug)
+def load_quiz(key: str) -> dict | None:
+    return common.load_quiz(CFG.workspace, key)
+
+
+def list_topics() -> list[dict]:
+    return [{"topic": t, **meta} for t, meta in common.iter_topics(CFG.workspace)]
 
 
 def list_quizzes() -> list[dict]:
@@ -71,6 +83,7 @@ def list_quizzes() -> list[dict]:
         qs = q.get("questions", [])
         out.append({
             "slug": slug,
+            "topic": slug.split("/")[0] if "/" in slug else None,
             "title": q.get("title", slug),
             "created": q.get("created", ""),
             "mc": sum(1 for x in qs if x.get("type") == "mc"),
@@ -112,7 +125,7 @@ def grade(slug: str, qid: str, answer: str) -> dict:
     safe_answer = answer.replace("</student_answer>", "</student_answer_>")
     prompt = (
         "Use the study-quiz:grade skill to grade this answer.\n"
-        f"Quiz slug: {slug}\nQuestion id: {qid}\n"
+        f"Quiz: {slug}\nQuestion id: {qid}\n"
         f"<student_answer>\n{safe_answer}\n</student_answer>"
     )
     tools = "Skill,Read,Glob,Grep"
@@ -197,35 +210,43 @@ class Handler(BaseHTTPRequestHandler):
         origin = self.headers.get("Origin")
         return origin is None or origin == f"http://{host}"
 
+    @staticmethod
+    def _group() -> str | None:
+        return None if CFG.fixed_workspace else common.active_group()
+
     # GET ----------------------------------------------------------------------
     def do_GET(self):
         if self.headers.get("Host", "").rsplit(":", 1)[0] not in ("localhost", "127.0.0.1"):
             return self._error(403, "unexpected Host header")
-        path = self.path.split("?", 1)[0].rstrip("/") or "/"
+        path = unquote(self.path.split("?", 1)[0]).rstrip("/") or "/"
         if path in ("/", "/quiz"):
             return self._send(200, TEMPLATE.read_bytes(), "text/html; charset=utf-8")
         if path == "/api/quizzes":
-            return self._json({"workspace": str(CFG.workspace), "quizzes": list_quizzes()})
+            return self._json({"workspace": str(CFG.workspace), "group": self._group(),
+                               "topics": list_topics(), "quizzes": list_quizzes()})
         if path == "/api/health":
             return self._json({"ok": True, "app": "study-quiz", "workspace": str(CFG.workspace),
+                               "group": self._group(), "follows_active_group": CFG.fixed_workspace is None,
                                "claude": bool(CFG.claude_bin), "model": CFG.model or "default"})
-        m = re.match(r"^/quiz/([^/]+)$", path)
+        m = re.match(r"^/api/quiz/(.+)/attempts$", path)
+        if m:
+            if not quiz_dir(m.group(1)):
+                return self._error(404, "quiz not found")
+            return self._json(read_attempts(m.group(1)))
+        m = re.match(r"^/quiz/(.+)$", path)
         if m:
             if not quiz_dir(m.group(1)):
                 return self._error(404, "quiz not found")
             return self._send(200, TEMPLATE.read_bytes(), "text/html; charset=utf-8")
-        m = re.match(r"^/api/quiz/([^/]+)$", path)
+        m = re.match(r"^/api/quiz/(.+)$", path)
         if m:
             q = load_quiz(m.group(1))
             if q is None:
                 return self._error(404, "quiz not found")
             q["slug"] = m.group(1)
+            if "/" in m.group(1):
+                q["topic_title"] = common.topic_meta(CFG.workspace, m.group(1).split("/")[0])["title"]
             return self._json(q)
-        m = re.match(r"^/api/quiz/([^/]+)/attempts$", path)
-        if m:
-            if not quiz_dir(m.group(1)):
-                return self._error(404, "quiz not found")
-            return self._json(read_attempts(m.group(1)))
         self._error(404, "not found")
 
     # POST ---------------------------------------------------------------------
@@ -284,7 +305,8 @@ def main() -> None:
                     help='model alias for grading; "" uses your Claude Code default')
     args = ap.parse_args()
 
-    CFG.workspace = common.workspace(args.workspace)
+    fixed = args.workspace or os.environ.get("STUDY_QUIZ_DIR")
+    CFG.fixed_workspace = common.workspace(fixed) if fixed else None
     CFG.workspace.mkdir(parents=True, exist_ok=True)
     CFG.model = args.model
     CFG.claude_bin = os.environ.get("STUDY_QUIZ_CLAUDE") or shutil.which("claude")
@@ -293,7 +315,7 @@ def main() -> None:
         httpd = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     except OSError as e:
         raise SystemExit(f"cannot listen on 127.0.0.1:{args.port} ({e}); try --port {args.port + 1}")
-    print(f"study-quiz serving {CFG.workspace}")
+    print(f"study-quiz serving {CFG.workspace}" + ("" if CFG.fixed_workspace else " (follows the active study group)"))
     print(f"open http://localhost:{args.port}/")
     if not CFG.claude_bin:
         print("warning: `claude` not found on PATH; open-ended grading will fail")

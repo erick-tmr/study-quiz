@@ -2,17 +2,30 @@
 """study-quiz helper CLI: the deterministic work the skills delegate here.
 
     sq.py workspace                  print the resolved workspace path
+    sq.py status                     JSON: active group, workspace, git setting, repo/remote
+    sq.py group                      list study groups
+    sq.py group new NAME [--path P]  create a group (default path <root>/NAME) and switch to it
+    sq.py group use NAME             switch the active group
+    sq.py group none                 no active group (use the top-level workspace)
     sq.py config [KEY [VALUE]]       show config, read KEY, or set KEY=VALUE
-    sq.py check SLUG                 validate <workspace>/SLUG/quiz.json
-    sq.py build SLUG                 write the standalone SLUG/index.html
-    sq.py index                      regenerate <workspace>/README.md
-    sq.py init-repo [--remote URL]   make the workspace a git repo (and remember git=true)
-    sq.py save SLUG                  check + build + index, then commit/push if git is enabled
+    sq.py topic                      list topics in the active workspace
+    sq.py topic new NAME [--title T] [--description D]   create a topic folder
+    sq.py topic set NAME [--title T] [--description D]   update a topic's title/description
+    sq.py check QUIZ                 validate <workspace>/QUIZ/quiz.json   (QUIZ = <topic>/<slug>)
+    sq.py build QUIZ                 write the standalone QUIZ/index.html
+    sq.py index                      regenerate <workspace>/README.md (grouped by topic)
+    sq.py init-repo [--remote URL | --github OWNER/NAME --visibility public|private [--description D]]
+                                     make the workspace a git repo (and remember git=true);
+                                     --github creates the repo with `gh` and pushes
+    sq.py save QUIZ                  check + build + index, then commit/push if git is enabled
 
 Config lives in $XDG_CONFIG_HOME/study-quiz/config.json (default ~/.config/...),
 so it is per installation and survives plugin updates. Keys:
-    git        true | false   version quizzes in git (unset = ask the user once)
-    workspace  path           quiz workspace (env STUDY_QUIZ_DIR wins)
+    git        true | false   version quizzes in git (unset = ask the user once);
+                              applies to the active group if there is one
+    workspace  path           top-level workspace and root for new groups
+    group      name           active study group (see `group`)
+    groups     {name: {path, git}}
 """
 
 from __future__ import annotations
@@ -51,6 +64,8 @@ def need_quiz(slug: str) -> dict:
 def build(slug: str) -> Path:
     q = need_quiz(slug)
     q["slug"] = slug
+    if "/" in slug:
+        q["topic_title"] = common.topic_meta(ws(), slug.split("/")[0])["title"]
     tpl = common.TEMPLATE.read_text()
     if DATA_MARKER not in tpl:
         die("template is missing the quiz-data marker")
@@ -63,31 +78,71 @@ def build(slug: str) -> Path:
     return out
 
 
+def _quiz_row(key: str, q: dict, link_prefix: str = "") -> str:
+    qs = q.get("questions", [])
+    mc = sum(1 for x in qs if x.get("type") == "mc")
+    op = sum(1 for x in qs if x.get("type") == "open")
+    title = str(q.get("title", key)).replace("|", "\\|")
+    return (f"| [{title}]({key}/index.html) | {q.get('created', '')} | {mc} MC · {op} open "
+            f"| [`quiz.json`]({key}/quiz.json) · [sources]({key}/sources) |")
+
+
 def index() -> Path:
     root = ws()
-    rows = []
-    for slug, q in sorted(common.iter_quizzes(root), key=lambda x: (x[1].get("created", ""), x[0]), reverse=True):
-        qs = q.get("questions", [])
-        mc = sum(1 for x in qs if x.get("type") == "mc")
-        op = sum(1 for x in qs if x.get("type") == "open")
-        title = str(q.get("title", slug)).replace("|", "\\|")
-        rows.append(f"| [{title}]({slug}/index.html) | {q.get('created', '')} | {mc} MC · {op} open | [`quiz.json`]({slug}/quiz.json) · [sources]({slug}/sources) |")
-    body = "\n".join(rows) or "| _no quizzes yet_ | | | |"
-    text = f"""# Study quizzes
+    quizzes = sorted(common.iter_quizzes(root), key=lambda x: (x[1].get("created", ""), x[0]), reverse=True)
+    head = "| Quiz | Created | Questions | Files |\n| --- | --- | --- | --- |\n"
+    parts = []
+    for topic, meta in common.iter_topics(root):
+        rows = [_quiz_row(k, q) for k, q in quizzes if k.startswith(topic + "/")]
+        desc = f"{meta['description']}\n\n" if meta.get("description") else ""
+        parts.append(f"## {meta['title']}\n\n{desc}" + (head + "\n".join(rows) if rows else "_No quizzes yet._") + "\n")
+    loose = [_quiz_row(k, q) for k, q in quizzes if "/" not in k]
+    if loose:
+        parts.append("## Other\n\n" + head + "\n".join(loose) + "\n")
+    group = common.active_group()
+    heading = f"{group}: study quizzes" if group else "Study quizzes"
+    n_topics = sum(1 for _ in common.iter_topics(root))
+    text = f"""# {heading}
 
 <!-- Generated by study-quiz (sq.py index). Edits here are overwritten. -->
 
-{len(rows)} quiz{'zes' if len(rows) != 1 else ''}, newest first. Open a quiz's `index.html` in a browser to
-practise offline (open questions are self-checked), or run the study-quiz server for
-Claude grading: `http://localhost:8765/quiz/<slug>`.
+{n_topics} topic{'s' if n_topics != 1 else ''} · {len(quizzes)} quiz{'zes' if len(quizzes) != 1 else ''}, newest first.
+Open a quiz's `index.html` in a browser to practise offline (open questions are
+self-checked), or run the [study-quiz](https://github.com/erick-tmr/study-quiz) server
+for Claude grading: `http://localhost:8765/quiz/<topic>/<quiz>`.
 
-| Quiz | Created | Questions | Files |
-| --- | --- | --- | --- |
-{body}
-"""
+{chr(10).join(parts) if parts else "_No topics yet._" + chr(10)}"""
     p = root / "README.md"
     p.write_text(text)
     return p
+
+
+def topic_cmd(action: str | None, name: str | None, title: str | None, description: str | None) -> None:
+    root = ws()
+    if action is None:
+        topics = list(common.iter_topics(root))
+        if not topics:
+            print("no topics yet (sq.py topic new NAME --title ...)")
+        for t, meta in topics:
+            n = sum(1 for k, _ in common.iter_quizzes(root) if k.startswith(t + "/"))
+            print(f"{t:<28} {n} quiz{'zes' if n != 1 else ''}  {meta['title']}")
+        return
+    if not name or not common.SLUG_RE.match(name):
+        die("topic name must be kebab-case: [a-z0-9-]")
+    d = root / name
+    if (d / "quiz.json").exists():
+        die(f"'{name}' is a quiz, not a topic")
+    if action == "new" and d.exists():
+        die(f"topic '{name}' already exists")
+    d.mkdir(parents=True, exist_ok=True)
+    meta = common.topic_meta(root, name) if (d / "topic.json").exists() else {}
+    if title:
+        meta["title"] = title
+    if description:
+        meta["description"] = description
+    meta.setdefault("title", name.replace("-", " ").capitalize())
+    (d / "topic.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False) + "\n")
+    print(f"topic {name}: {meta['title']} -> {d}")
 
 
 # ------------------------------------------------------------------ git
@@ -112,7 +167,8 @@ def ensure_gitignore() -> None:
         p.write_text(p.read_text().rstrip("\n") + "\n" + WS_GITIGNORE)
 
 
-def init_repo(remote: str | None) -> None:
+def init_repo(remote: str | None, github: str | None = None, visibility: str = "private",
+              description: str | None = None) -> None:
     root = ws()
     root.mkdir(parents=True, exist_ok=True)
     if not is_repo():
@@ -126,15 +182,26 @@ def init_repo(remote: str | None) -> None:
     if git("diff", "--cached", "--quiet", check=False).returncode:
         git("commit", "-q", "-m", "chore: set up study-quiz workspace")
         print("committed existing quizzes")
-    if remote and not has_remote():
+    if github and not has_remote():
+        if not git("rev-parse", "--verify", "HEAD", check=False).stdout.strip():
+            git("commit", "-q", "--allow-empty", "-m", "chore: initial commit")
+        cmd = ["gh", "repo", "create", github, f"--{visibility}", "--source", str(root),
+               "--remote", "origin", "--push"]
+        if description:
+            cmd += ["--description", description]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode:
+            die(f"gh repo create failed: {(r.stderr or r.stdout).strip()[-400:]}")
+        url = git("remote", "get-url", "origin", check=False).stdout.strip()
+        print(f"created {visibility} GitHub repo {github} and pushed ({url})")
+    elif remote and not has_remote():
         git("remote", "add", "origin", remote)
         print(f"remote origin = {remote}")
-    if has_remote():
         push()
-    cfg = common.load_config()
-    cfg["git"] = True
-    common.save_config(cfg)
-    print("config: git = true")
+    elif has_remote():
+        push()
+    common.set_git(True)
+    print("config: git = true" + (f" (group {common.active_group()})" if common.active_group() else ""))
 
 
 def push() -> None:
@@ -148,7 +215,8 @@ def push() -> None:
 def commit_quiz(slug: str, title: str) -> None:
     tracked = bool(git("ls-files", f"{slug}/quiz.json", check=False).stdout.strip())
     ensure_gitignore()
-    git("add", "--", slug, "README.md", ".gitignore")
+    # The quiz, the index, and every topic.json (the README lists all topics).
+    git("add", "--", slug, "README.md", ".gitignore", ":(glob)*/topic.json")
     if not git("diff", "--cached", "--quiet", check=False).returncode:
         print("git: nothing changed")
         return
@@ -161,24 +229,95 @@ def commit_quiz(slug: str, title: str) -> None:
         print("git: no remote configured; commit is local only")
 
 
+# ------------------------------------------------------------------ groups
+
+def group_cmd(action: str | None, name: str | None, path: str | None) -> None:
+    cfg = common.load_config()
+    groups = cfg.setdefault("groups", {})
+    if action is None:
+        active = common.active_group(cfg)
+        if not groups:
+            print("no study groups yet (sq.py group new NAME)")
+        for g, info in sorted(groups.items()):
+            mark = "*" if g == active else " "
+            print(f"{mark} {g:<24} {info['path']}  git={json.dumps(info.get('git'))}")
+        if not active:
+            print(f"(no active group; workspace = {common.workspace()})")
+        return
+    if action == "none":
+        cfg.pop("group", None)
+        common.save_config(cfg)
+        print(f"no active group; workspace = {common.workspace()}")
+        return
+    if not name or not common.SLUG_RE.match(name):
+        die("group name must be kebab-case: [a-z0-9-]")
+    if action == "new":
+        if name in groups:
+            die(f"group '{name}' already exists (sq.py group use {name})")
+        p = Path(path).expanduser().resolve() if path else common.groups_root(cfg) / name
+        p.mkdir(parents=True, exist_ok=True)
+        groups[name] = {"path": str(p), "git": None}
+    elif action == "use":
+        if name not in groups:
+            die(f"no group '{name}'; existing: {', '.join(sorted(groups)) or 'none'}")
+    else:
+        die(f"unknown group action '{action}'")
+    cfg["group"] = name
+    common.save_config(cfg)
+    print(f"active group: {name} -> {groups[name]['path']}")
+
+
+def status() -> None:
+    root = ws()
+    print(json.dumps({
+        "group": common.active_group(),
+        "workspace": str(root),
+        "git": common.get_git(),
+        "is_repo": is_repo(),
+        "remote": git("remote", "get-url", "origin", check=False).stdout.strip() if is_repo() else "",
+        "topics": {t: {"title": m["title"], "quizzes": [k for k, _ in common.iter_quizzes(root) if k.startswith(t + "/")]}
+                   for t, m in common.iter_topics(root)},
+        "other_quizzes": [k for k, _ in common.iter_quizzes(root) if "/" not in k],
+    }, indent=2))
+
+
 # ------------------------------------------------------------------ main
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("workspace")
+    sub.add_parser("status")
+    g = sub.add_parser("group"); g.add_argument("action", nargs="?", choices=["new", "use", "none"])
+    g.add_argument("name", nargs="?"); g.add_argument("--path")
     c = sub.add_parser("config"); c.add_argument("key", nargs="?"); c.add_argument("value", nargs="?")
     for name in ("check", "build", "save"):
-        sub.add_parser(name).add_argument("slug")
+        sub.add_parser(name).add_argument("slug", metavar="QUIZ", help="<topic>/<slug>")
+    t = sub.add_parser("topic"); t.add_argument("action", nargs="?", choices=["new", "set"])
+    t.add_argument("name", nargs="?"); t.add_argument("--title"); t.add_argument("--description")
     sub.add_parser("index")
     r = sub.add_parser("init-repo"); r.add_argument("--remote")
+    r.add_argument("--github", metavar="OWNER/NAME", help="create this GitHub repo with gh and push")
+    r.add_argument("--visibility", choices=["public", "private"], default="private")
+    r.add_argument("--description")
     a = ap.parse_args()
 
     if a.cmd == "workspace":
         print(ws())
+    elif a.cmd == "status":
+        status()
+    elif a.cmd == "group":
+        group_cmd(a.action, a.name, a.path)
     elif a.cmd == "config":
         cfg = common.load_config()
-        if a.key is None:
+        if a.key == "git":  # per-group aware
+            if a.value is None:
+                print(json.dumps(common.get_git()))
+            else:
+                common.set_git(a.value.lower() == "true")
+                print(f"config: git = {json.dumps(common.get_git())}"
+                      + (f" (group {common.active_group()})" if common.active_group() else ""))
+        elif a.key is None:
             print(json.dumps({"path": str(common.config_path()), **cfg}, indent=2))
         elif a.value is None:
             print(json.dumps(cfg.get(a.key)))
@@ -200,7 +339,9 @@ def main() -> None:
     elif a.cmd == "index":
         print(index())
     elif a.cmd == "init-repo":
-        init_repo(a.remote)
+        init_repo(a.remote, a.github, a.visibility, a.description)
+    elif a.cmd == "topic":
+        topic_cmd(a.action, a.name, a.title, a.description)
     elif a.cmd == "save":
         q = need_quiz(a.slug)
         errs = common.validate_quiz(q)
@@ -208,7 +349,7 @@ def main() -> None:
             die("invalid quiz.json:\n  " + "\n  ".join(errs))
         print(f"page: {build(a.slug)}")
         index()
-        git_on = common.load_config().get("git")
+        git_on = common.get_git()
         if git_on and is_repo():
             commit_quiz(a.slug, q.get("title", a.slug))
         elif git_on:
