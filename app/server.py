@@ -10,7 +10,9 @@ Standard library only. Binds to 127.0.0.1.
     python3 server.py [--port 8765] [--workspace ~/study-quizzes]
 
 Environment / config (see common.py):
-    STUDY_QUIZ_DIR           quiz workspace (else config "workspace", else ~/study-quizzes)
+    STUDY_QUIZ_DIR           quiz workspace (else the active study group, else config
+                             "workspace", else ~/study-quizzes). Without --workspace or
+                             STUDY_QUIZ_DIR the server follows the active group live.
     STUDY_QUIZ_GRADER_MODEL  model alias for grading (default: sonnet)
     STUDY_QUIZ_CLAUDE        path to the claude binary (default: claude on PATH)
 """
@@ -44,9 +46,14 @@ def now_iso() -> str:
 
 
 class Config:
-    workspace: Path
+    fixed_workspace: Path | None = None
     model: str
     claude_bin: str | None
+
+    @property
+    def workspace(self) -> Path:
+        # Re-resolved per request so `sq.py group use X` takes effect without a restart.
+        return self.fixed_workspace or common.workspace()
 
 
 CFG = Config()
@@ -197,6 +204,10 @@ class Handler(BaseHTTPRequestHandler):
         origin = self.headers.get("Origin")
         return origin is None or origin == f"http://{host}"
 
+    @staticmethod
+    def _group() -> str | None:
+        return None if CFG.fixed_workspace else common.active_group()
+
     # GET ----------------------------------------------------------------------
     def do_GET(self):
         if self.headers.get("Host", "").rsplit(":", 1)[0] not in ("localhost", "127.0.0.1"):
@@ -205,9 +216,10 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/", "/quiz"):
             return self._send(200, TEMPLATE.read_bytes(), "text/html; charset=utf-8")
         if path == "/api/quizzes":
-            return self._json({"workspace": str(CFG.workspace), "quizzes": list_quizzes()})
+            return self._json({"workspace": str(CFG.workspace), "group": self._group(), "quizzes": list_quizzes()})
         if path == "/api/health":
             return self._json({"ok": True, "app": "study-quiz", "workspace": str(CFG.workspace),
+                               "group": self._group(), "follows_active_group": CFG.fixed_workspace is None,
                                "claude": bool(CFG.claude_bin), "model": CFG.model or "default"})
         m = re.match(r"^/quiz/([^/]+)$", path)
         if m:
@@ -284,7 +296,8 @@ def main() -> None:
                     help='model alias for grading; "" uses your Claude Code default')
     args = ap.parse_args()
 
-    CFG.workspace = common.workspace(args.workspace)
+    fixed = args.workspace or os.environ.get("STUDY_QUIZ_DIR")
+    CFG.fixed_workspace = common.workspace(fixed) if fixed else None
     CFG.workspace.mkdir(parents=True, exist_ok=True)
     CFG.model = args.model
     CFG.claude_bin = os.environ.get("STUDY_QUIZ_CLAUDE") or shutil.which("claude")
@@ -293,7 +306,7 @@ def main() -> None:
         httpd = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     except OSError as e:
         raise SystemExit(f"cannot listen on 127.0.0.1:{args.port} ({e}); try --port {args.port + 1}")
-    print(f"study-quiz serving {CFG.workspace}")
+    print(f"study-quiz serving {CFG.workspace}" + ("" if CFG.fixed_workspace else " (follows the active study group)"))
     print(f"open http://localhost:{args.port}/")
     if not CFG.claude_bin:
         print("warning: `claude` not found on PATH; open-ended grading will fail")

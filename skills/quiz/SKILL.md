@@ -1,8 +1,8 @@
 ---
 name: quiz
-description: Generate a study quiz (multiple-choice flashcards plus open-ended questions graded by Claude) from a topic, notes, files or URLs, and serve it as an interactive local HTML page, optionally versioned in a git repo. Use when the user wants to study, review or test themselves on something, or asks for flashcards, a quiz, practice questions or exam prep. Also "from mistakes <slug>" to target weak spots, and "git on|off" / "init-repo" to manage quiz versioning.
-argument-hint: <topic | notes path | url> [n=10] [mix=6mc/4open] | from mistakes <slug> | git on|off | init-repo [remote]
-version: 0.2.0
+description: Generate a study quiz (multiple-choice flashcards plus open-ended questions graded by Claude) from a topic, notes, files or URLs, and serve it as an interactive local HTML page, optionally versioned in a git repo. Use when the user wants to study, review or test themselves on something, or asks for flashcards, a quiz, practice questions or exam prep. Also "from mistakes <slug>" to target weak spots, "group <name>" to create or switch study groups (one workspace/repo per subject), and "git on|off" / "init-repo" to manage quiz versioning.
+argument-hint: <topic | notes path | url> [n=10] [mix=6mc/4open] | from mistakes <slug> | group [name] | git on|off | init-repo [remote]
+version: 0.3.0
 ---
 
 # Generate a study quiz
@@ -18,9 +18,10 @@ handles git.
 - **Plugin root**: `${CLAUDE_PLUGIN_ROOT}`. If that is empty, use two directories
   above this skill's base directory (`<base>/../..`).
 - **Helper**: `SQ="python3 <plugin root>/app/sq.py"`.
-- **Workspace**: run `$SQ workspace`. It prints the absolute path, using
-  `STUDY_QUIZ_DIR`, then the config, then `~/study-quizzes`. Create the folder if
-  it doesn't exist.
+- **Workspace**: run `$SQ status`. It prints JSON with the active study `group`,
+  the `workspace` path (`STUDY_QUIZ_DIR` > active group > config >
+  `~/study-quizzes`), the `git` setting, `is_repo`, `remote` and the existing
+  quizzes. Mention the active group when there is one.
 
 ## 2. Settings commands (handle these and stop)
 
@@ -30,16 +31,28 @@ handles git.
   left as it is.
 - `init-repo [remote-url]` → `$SQ init-repo [--remote URL]`. If the user wants a
   GitHub remote but has no URL, offer to create a **private** repo with
-  `gh repo create <name> --private` and confirm the name first. Never make it
+  `gh repo create <name> --private` (suggest the group name) and confirm the name first. Never make it
   public unless they ask.
 - `config` → show `$SQ config`.
+- `groups` → `$SQ group` (lists groups; `*` marks the active one).
+- `group <name>` → if it exists, `$SQ group use <name>`. If it doesn't, confirm
+  with the user and run `$SQ group new <name>` (it lives in
+  `~/study-quizzes/<name>` unless they want a path, `--path`). A new group has
+  its own git preference, so continue with step 3 for it.
+- `group none` → `$SQ group none`.
+
+A **study group** is a separate workspace, and optionally a separate git repo, per
+subject (for example `ai-engineer`, `networking`). Generated quizzes go to the active
+group. Inside a group, place quizzes in the group (don't ask which group) unless
+the topic clearly belongs to a different existing group; then ask.
 
 ## 3. Git preference (once per installation)
 
 Read `$SQ config git`:
 - `true` / `false`: respect it silently.
-- `null` (never asked): **ask the user once**, before generating: "Do you want
-  your quizzes versioned in a git repo at `<workspace>`? Each new quiz gets a
+- `null` (never asked, for this group or the top-level workspace): **ask the user
+  once**, before generating: "Do you want your quizzes versioned in a git repo at
+  `<workspace>`? Each new quiz gets a
   commit, a browsable README index, and an automatic push if the repo has a
   remote. Answer history stays local." Then:
   - yes → `$SQ init-repo` (plus the remote offer from step 2)
@@ -116,9 +129,12 @@ exists. Report what it printed about git, including any push failure.
 ## 8. Serve it
 
 Check for a running server with `curl -s localhost:8765/api/health`:
-- It answers with `"app": "study-quiz"` and the same `workspace`: reuse it.
+- It answers with `"app": "study-quiz"` and either the same `workspace` or
+  `"follows_active_group": true`: reuse it. A server started without
+  `--workspace` follows the active group live.
 - Nothing answers: start it in the background (keep it running, don't wait on it):
-  `python3 "<plugin root>/app/server.py" --workspace "<workspace>"`
+  `python3 "<plugin root>/app/server.py"`. Don't pass `--workspace`, so it
+  follows group switches.
 - Something else answers, or a study-quiz server for a different workspace: start
   one with `--port 8766` (or the next free port), use that port in the URL, and
   tell the user why.

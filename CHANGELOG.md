@@ -3,6 +3,16 @@
 All notable changes to this plugin are documented here. Versions follow
 [semver](https://semver.org/); the version lives in `.claude-plugin/plugin.json`.
 
+## [0.3.0] - 2026-11-26
+
+### Added
+- Study groups: one workspace (and optional git repo) per subject. `sq.py group
+  [new|use|none] NAME`, skill commands `group <name>` / `groups` / `group none`.
+- Per-group git preference (asked once per group).
+- `sq.py status` JSON summary used by the skill.
+- Server follows the active group live when started without `--workspace`;
+  `/api/health` reports `group` and `follows_active_group`.
+
 ## [0.2.0] - 2026-11-26
 
 ### Added

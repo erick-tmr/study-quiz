@@ -37,10 +37,47 @@ def save_config(cfg: dict) -> None:
     p.write_text(json.dumps(cfg, indent=2) + "\n")
 
 
+# Study groups: each group is its own workspace (and optionally its own git repo).
+#   config = {"group": "ai-engineer",
+#             "groups": {"ai-engineer": {"path": "...", "git": true}},
+#             "workspace": "...", "git": false}      # top-level = no active group
+
+def active_group(cfg: dict | None = None) -> str | None:
+    cfg = load_config() if cfg is None else cfg
+    g = cfg.get("group")
+    return g if g and g in cfg.get("groups", {}) else None
+
+
+def groups_root(cfg: dict | None = None) -> Path:
+    cfg = load_config() if cfg is None else cfg
+    return Path(cfg.get("workspace") or DEFAULT_WORKSPACE).expanduser().resolve()
+
+
 def workspace(override: str | None = None) -> Path:
-    """CLI flag > STUDY_QUIZ_DIR > config 'workspace' > ~/study-quizzes."""
-    raw = override or os.environ.get("STUDY_QUIZ_DIR") or load_config().get("workspace") or DEFAULT_WORKSPACE
+    """CLI flag > STUDY_QUIZ_DIR > active group > config 'workspace' > ~/study-quizzes."""
+    raw = override or os.environ.get("STUDY_QUIZ_DIR")
+    if not raw:
+        cfg = load_config()
+        g = active_group(cfg)
+        raw = cfg["groups"][g]["path"] if g else (cfg.get("workspace") or DEFAULT_WORKSPACE)
     return Path(raw).expanduser().resolve()
+
+
+def get_git(cfg: dict | None = None):
+    """Git preference for the current workspace: True / False / None (never asked)."""
+    cfg = load_config() if cfg is None else cfg
+    g = active_group(cfg)
+    return cfg["groups"][g].get("git") if g else cfg.get("git")
+
+
+def set_git(value: bool) -> None:
+    cfg = load_config()
+    g = active_group(cfg)
+    if g:
+        cfg["groups"][g]["git"] = value
+    else:
+        cfg["git"] = value
+    save_config(cfg)
 
 
 # ------------------------------------------------------------------ quizzes

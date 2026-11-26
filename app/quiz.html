@@ -125,7 +125,7 @@ async function renderIndex() {
       <div class="small muted">${q.mc} multiple choice · ${q.open} open · ${q.attempts} attempts${q.created ? " · " + esc(q.created) : ""}</div>
     </a>`).join("");
   $app.innerHTML = `
-    <header class="top"><h1>Study Quiz</h1><span class="small muted">${esc(data.workspace)}</span></header>
+    <header class="top"><h1>Study Quiz${data.group ? ` <span class="tag">${esc(data.group)}</span>` : ""}</h1><span class="small muted">${esc(data.workspace)}</span></header>
     ${items ? `<div class="list">${items}</div>` :
       `<div class="card"><h2>No quizzes yet</h2><p class="muted">In Claude Code, run <code>/study-quiz:quiz &lt;topic or notes file&gt;</code> to generate one.</p></div>`}`;
 }

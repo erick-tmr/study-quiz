@@ -1,6 +1,6 @@
 {
   "name": "study-quiz",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Generate study quizzes (multiple-choice flashcards + open-ended questions) with Claude and get open answers graded by Claude, all through your own Claude Code login. Interactive HTML page served locally.",
   "author": {
     "name": "Erick Takeshi",

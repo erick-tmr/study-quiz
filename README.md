@@ -12,6 +12,8 @@ files or URLs into an interactive study quiz:
   works offline (open questions are self-checked against the key points).
 - **Optional git versioning**: keep your quizzes in a git repo with a browsable
   index. Each new quiz is committed, and pushed when the repo has a remote.
+- **Study groups**: one workspace (and optionally one repo) per subject, such as
+  `ai-engineer` or `networking`. Switch between them with a single command.
 
 Everything runs locally through **your own Claude Code login**. Quiz generation
 happens in your Claude Code session, and grading runs headless `claude -p` in the
@@ -43,6 +45,7 @@ Update later with `/plugin marketplace update study-quiz`.
 /study-quiz:quiz ~/notes/biology/cell-cycle.md n=15
 /study-quiz:quiz https://en.wikipedia.org/wiki/Raft_(algorithm) mix=4mc/4open
 /study-quiz:quiz from mistakes tcp-basics
+/study-quiz:quiz group ai-engineer # create or switch study group; `groups` lists them
 /study-quiz:quiz git on            # or: git off, init-repo <remote-url>, config
 ```
 
@@ -72,10 +75,25 @@ Claude writes only `quiz.json` and `sources/`. Pages are stamped from one shared
 template by `app/sq.py`, so they stay small and consistent, and Claude spends no
 tokens on HTML. If you edit a `quiz.json` by hand, run `python3 <plugin>/app/sq.py save <slug>`.
 
+## Study groups
+
+A study group is a separate quiz workspace for one subject, with its own optional git
+repo:
+
+```
+/study-quiz:quiz group ai-engineer      # create (in ~/study-quizzes/ai-engineer) or switch
+/study-quiz:quiz groups                 # list; * marks the active group
+/study-quiz:quiz group none             # back to the top-level workspace
+```
+
+New quizzes go to the active group. The local server follows the active group live,
+so switching needs no restart. Each group has its own git preference and remote,
+so `ai-engineer` can be a public GitHub repo while another group stays local.
+
 ## Versioning your quizzes (optional)
 
 The first time you generate a quiz, the skill asks whether to keep your quizzes in
-git and remembers the answer in `~/.config/study-quiz/config.json`. That file belongs
+git and remembers the answer (per study group) in `~/.config/study-quiz/config.json`. That file belongs
 to this installation and survives plugin updates.
 
 - **On**: the workspace becomes a git repo (`.gitignore` excludes `attempts.json`).
@@ -91,7 +109,7 @@ to this installation and survives plugin updates.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `STUDY_QUIZ_DIR` | config `workspace`, else `~/study-quizzes` | Quiz workspace |
+| `STUDY_QUIZ_DIR` | active group, else config `workspace`, else `~/study-quizzes` | Quiz workspace (pins it, ignoring groups) |
 | `STUDY_QUIZ_GRADER_MODEL` | `sonnet` | Model alias used for grading (`haiku` is faster, `opus` more nuanced; `""` uses your Claude Code default) |
 | `STUDY_QUIZ_PORT` | `8765` | Server port |
 | `STUDY_QUIZ_CLAUDE` | `claude` on `PATH` | Path to the Claude Code binary |

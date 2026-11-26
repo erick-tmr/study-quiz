@@ -2,6 +2,11 @@
 """study-quiz helper CLI: the deterministic work the skills delegate here.
 
     sq.py workspace                  print the resolved workspace path
+    sq.py status                     JSON: active group, workspace, git setting, repo/remote
+    sq.py group                      list study groups
+    sq.py group new NAME [--path P]  create a group (default path <root>/NAME) and switch to it
+    sq.py group use NAME             switch the active group
+    sq.py group none                 no active group (use the top-level workspace)
     sq.py config [KEY [VALUE]]       show config, read KEY, or set KEY=VALUE
     sq.py check SLUG                 validate <workspace>/SLUG/quiz.json
     sq.py build SLUG                 write the standalone SLUG/index.html
@@ -11,8 +16,11 @@
 
 Config lives in $XDG_CONFIG_HOME/study-quiz/config.json (default ~/.config/...),
 so it is per installation and survives plugin updates. Keys:
-    git        true | false   version quizzes in git (unset = ask the user once)
-    workspace  path           quiz workspace (env STUDY_QUIZ_DIR wins)
+    git        true | false   version quizzes in git (unset = ask the user once);
+                              applies to the active group if there is one
+    workspace  path           top-level workspace and root for new groups
+    group      name           active study group (see `group`)
+    groups     {name: {path, git}}
 """
 
 from __future__ import annotations
@@ -131,10 +139,8 @@ def init_repo(remote: str | None) -> None:
         print(f"remote origin = {remote}")
     if has_remote():
         push()
-    cfg = common.load_config()
-    cfg["git"] = True
-    common.save_config(cfg)
-    print("config: git = true")
+    common.set_git(True)
+    print("config: git = true" + (f" (group {common.active_group()})" if common.active_group() else ""))
 
 
 def push() -> None:
@@ -161,12 +167,65 @@ def commit_quiz(slug: str, title: str) -> None:
         print("git: no remote configured; commit is local only")
 
 
+# ------------------------------------------------------------------ groups
+
+def group_cmd(action: str | None, name: str | None, path: str | None) -> None:
+    cfg = common.load_config()
+    groups = cfg.setdefault("groups", {})
+    if action is None:
+        active = common.active_group(cfg)
+        if not groups:
+            print("no study groups yet (sq.py group new NAME)")
+        for g, info in sorted(groups.items()):
+            mark = "*" if g == active else " "
+            print(f"{mark} {g:<24} {info['path']}  git={json.dumps(info.get('git'))}")
+        if not active:
+            print(f"(no active group; workspace = {common.workspace()})")
+        return
+    if action == "none":
+        cfg.pop("group", None)
+        common.save_config(cfg)
+        print(f"no active group; workspace = {common.workspace()}")
+        return
+    if not name or not common.SLUG_RE.match(name):
+        die("group name must be kebab-case: [a-z0-9-]")
+    if action == "new":
+        if name in groups:
+            die(f"group '{name}' already exists (sq.py group use {name})")
+        p = Path(path).expanduser().resolve() if path else common.groups_root(cfg) / name
+        p.mkdir(parents=True, exist_ok=True)
+        groups[name] = {"path": str(p), "git": None}
+    elif action == "use":
+        if name not in groups:
+            die(f"no group '{name}'; existing: {', '.join(sorted(groups)) or 'none'}")
+    else:
+        die(f"unknown group action '{action}'")
+    cfg["group"] = name
+    common.save_config(cfg)
+    print(f"active group: {name} -> {groups[name]['path']}")
+
+
+def status() -> None:
+    root = ws()
+    print(json.dumps({
+        "group": common.active_group(),
+        "workspace": str(root),
+        "git": common.get_git(),
+        "is_repo": is_repo(),
+        "remote": git("remote", "get-url", "origin", check=False).stdout.strip() if is_repo() else "",
+        "quizzes": [slug for slug, _ in common.iter_quizzes(root)],
+    }, indent=2))
+
+
 # ------------------------------------------------------------------ main
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("workspace")
+    sub.add_parser("status")
+    g = sub.add_parser("group"); g.add_argument("action", nargs="?", choices=["new", "use", "none"])
+    g.add_argument("name", nargs="?"); g.add_argument("--path")
     c = sub.add_parser("config"); c.add_argument("key", nargs="?"); c.add_argument("value", nargs="?")
     for name in ("check", "build", "save"):
         sub.add_parser(name).add_argument("slug")
@@ -176,9 +235,20 @@ def main() -> None:
 
     if a.cmd == "workspace":
         print(ws())
+    elif a.cmd == "status":
+        status()
+    elif a.cmd == "group":
+        group_cmd(a.action, a.name, a.path)
     elif a.cmd == "config":
         cfg = common.load_config()
-        if a.key is None:
+        if a.key == "git":  # per-group aware
+            if a.value is None:
+                print(json.dumps(common.get_git()))
+            else:
+                common.set_git(a.value.lower() == "true")
+                print(f"config: git = {json.dumps(common.get_git())}"
+                      + (f" (group {common.active_group()})" if common.active_group() else ""))
+        elif a.key is None:
             print(json.dumps({"path": str(common.config_path()), **cfg}, indent=2))
         elif a.value is None:
             print(json.dumps(cfg.get(a.key)))
@@ -208,7 +278,7 @@ def main() -> None:
             die("invalid quiz.json:\n  " + "\n  ".join(errs))
         print(f"page: {build(a.slug)}")
         index()
-        git_on = common.load_config().get("git")
+        git_on = common.get_git()
         if git_on and is_repo():
             commit_quiz(a.slug, q.get("title", a.slug))
         elif git_on:
