@@ -1,0 +1,55 @@
+{
+  "slug": "tcp-basics",
+  "title": "TCP basics",
+  "created": "2026-11-26",
+  "language": "en",
+  "sources": ["sources/notes.md"],
+  "questions": [
+    {
+      "id": "q1", "type": "mc",
+      "prompt": "In the three-way handshake, what does the server's SYN-ACK acknowledge?",
+      "options": ["The client's ISN + 1", "The server's own ISN", "The first byte of application data", "The client's receive window"],
+      "answer": 0,
+      "explanation": "The SYN consumes one sequence number, so the server ACKs client ISN + 1 while also announcing its own ISN."
+    },
+    {
+      "id": "q2", "type": "mc",
+      "prompt": "Which window protects the receiver from being overwhelmed?",
+      "options": ["Congestion window (cwnd)", "Receive window (rwnd)", "Slow-start threshold", "TIME_WAIT window"],
+      "answer": 1,
+      "explanation": "Flow control uses the receiver-advertised rwnd; cwnd is congestion control, which protects the network."
+    },
+    {
+      "id": "q3", "type": "mc",
+      "prompt": "What triggers TCP fast retransmit?",
+      "options": ["A retransmission timeout", "A FIN segment", "Three duplicate ACKs", "A zero receive window"],
+      "answer": 2,
+      "explanation": "Three duplicate ACKs signal a likely lost segment, so it is resent before the RTO expires."
+    },
+    {
+      "id": "q4", "type": "open",
+      "prompt": "Why does TCP need a three-way handshake instead of two messages?",
+      "reference_answer": "Each side has to announce its own initial sequence number and get confirmation that the other side received it, which takes SYN, SYN-ACK, ACK. This proves both directions work, and together with random ISNs it prevents old duplicate segments from a previous connection being accepted as a new connection.",
+      "key_points": [
+        "Both sides exchange/synchronize initial sequence numbers",
+        "Each side's ISN must be acknowledged, confirming both directions work",
+        "Prevents old/delayed duplicate segments from creating or corrupting a new connection"
+      ],
+      "source_refs": ["sources/notes.md"],
+      "difficulty": "medium"
+    },
+    {
+      "id": "q5", "type": "open",
+      "prompt": "Explain the difference between flow control and congestion control in TCP.",
+      "reference_answer": "Flow control protects the receiver: the receiver advertises a receive window (rwnd) limiting unacknowledged data in flight. Congestion control protects the network: the sender maintains a congestion window (cwnd) that grows with slow start/congestion avoidance and shrinks on loss. The sender uses min(rwnd, cwnd).",
+      "key_points": [
+        "Flow control protects the receiver, via the advertised receive window (rwnd)",
+        "Congestion control protects the network, via the sender's congestion window (cwnd)",
+        "cwnd grows (slow start / congestion avoidance) and shrinks on loss",
+        "Effective sending window is min(rwnd, cwnd)"
+      ],
+      "source_refs": ["sources/notes.md"],
+      "difficulty": "medium"
+    }
+  ]
+}

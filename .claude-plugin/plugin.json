@@ -1,0 +1,13 @@
+{
+  "name": "study-quiz",
+  "version": "0.1.0",
+  "description": "Generate study quizzes (multiple-choice flashcards + open-ended questions) with Claude and get open answers graded by Claude, all through your own Claude Code login. Interactive HTML page served locally.",
+  "author": {
+    "name": "Erick Takeshi",
+    "url": "https://github.com/erick-tmr"
+  },
+  "homepage": "https://github.com/erick-tmr/study-quiz",
+  "repository": "https://github.com/erick-tmr/study-quiz",
+  "license": "MIT",
+  "keywords": ["study", "quiz", "flashcards", "learning", "education"]
+}

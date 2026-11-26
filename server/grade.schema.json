@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["score", "verdict", "points_hit", "points_missed", "feedback", "review_hint"],
+  "properties": {
+    "score": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "verdict": { "type": "string", "enum": ["correct", "partial", "wrong"] },
+    "points_hit": { "type": "array", "items": { "type": "string" } },
+    "points_missed": { "type": "array", "items": { "type": "string" } },
+    "feedback": { "type": "string" },
+    "review_hint": { "type": "string" }
+  }
+}

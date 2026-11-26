@@ -1,0 +1,15 @@
+{
+  "name": "study-quiz",
+  "description": "study-quiz: AI-generated study quizzes with Claude-graded open-ended answers.",
+  "owner": {
+    "name": "Erick Takeshi",
+    "url": "https://github.com/erick-tmr"
+  },
+  "plugins": [
+    {
+      "name": "study-quiz",
+      "source": "./",
+      "description": "AI-generated study quizzes with Claude-graded open-ended answers, served as a local interactive HTML page."
+    }
+  ]
+}
