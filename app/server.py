@@ -9,8 +9,8 @@ Standard library only. Binds to 127.0.0.1.
 
     python3 server.py [--port 8765] [--workspace ~/study-quizzes]
 
-Environment:
-    STUDY_QUIZ_DIR           quiz workspace (default ~/study-quizzes)
+Environment / config (see common.py):
+    STUDY_QUIZ_DIR           quiz workspace (else config "workspace", else ~/study-quizzes)
     STUDY_QUIZ_GRADER_MODEL  model alias for grading (default: sonnet)
     STUDY_QUIZ_CLAUDE        path to the claude binary (default: claude on PATH)
 """
@@ -25,16 +25,13 @@ import shutil
 import subprocess
 import threading
 from datetime import datetime, timezone
-from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-SERVER_DIR = Path(__file__).resolve().parent
-PLUGIN_ROOT = SERVER_DIR.parent
-TEMPLATE = SERVER_DIR / "quiz.html"
-SCHEMA = (SERVER_DIR / "grade.schema.json").read_text()
+import common
+from common import PLUGIN_ROOT, SLUG_RE, TEMPLATE
 
-SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+SCHEMA = (common.APP_DIR / "grade.schema.json").read_text()
 QID_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 MAX_ANSWER = 8000
 GRADE_TIMEOUT = 180
@@ -65,31 +62,20 @@ def quiz_dir(slug: str) -> Path | None:
 
 
 def load_quiz(slug: str) -> dict | None:
-    d = quiz_dir(slug)
-    if not d:
-        return None
-    try:
-        return json.loads((d / "quiz.json").read_text())
-    except (OSError, json.JSONDecodeError):
-        return None
+    return common.load_quiz(CFG.workspace, slug)
 
 
 def list_quizzes() -> list[dict]:
     out = []
-    if not CFG.workspace.is_dir():
-        return out
-    for d in sorted(CFG.workspace.iterdir()):
-        q = load_quiz(d.name) if d.is_dir() else None
-        if not q:
-            continue
+    for slug, q in common.iter_quizzes(CFG.workspace):
         qs = q.get("questions", [])
         out.append({
-            "slug": d.name,
-            "title": q.get("title", d.name),
+            "slug": slug,
+            "title": q.get("title", slug),
             "created": q.get("created", ""),
             "mc": sum(1 for x in qs if x.get("type") == "mc"),
             "open": sum(1 for x in qs if x.get("type") == "open"),
-            "attempts": len(read_attempts(d.name)),
+            "attempts": len(read_attempts(slug)),
         })
     return out
 
@@ -293,12 +279,12 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> None:
     ap = argparse.ArgumentParser(description="study-quiz local server")
     ap.add_argument("--port", type=int, default=int(os.environ.get("STUDY_QUIZ_PORT", "8765")))
-    ap.add_argument("--workspace", default=os.environ.get("STUDY_QUIZ_DIR", "~/study-quizzes"))
+    ap.add_argument("--workspace", default=None, help="default: STUDY_QUIZ_DIR, config, ~/study-quizzes")
     ap.add_argument("--model", default=os.environ.get("STUDY_QUIZ_GRADER_MODEL", "sonnet"),
                     help='model alias for grading; "" uses your Claude Code default')
     args = ap.parse_args()
 
-    CFG.workspace = Path(args.workspace).expanduser().resolve()
+    CFG.workspace = common.workspace(args.workspace)
     CFG.workspace.mkdir(parents=True, exist_ok=True)
     CFG.model = args.model
     CFG.claude_bin = os.environ.get("STUDY_QUIZ_CLAUDE") or shutil.which("claude")

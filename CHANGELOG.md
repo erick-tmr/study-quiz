@@ -3,6 +3,23 @@
 All notable changes to this plugin are documented here. Versions follow
 [semver](https://semver.org/); the version lives in `.claude-plugin/plugin.json`.
 
+## [0.2.0] - 2026-11-26
+
+### Added
+- Standalone `index.html` per quiz, stamped from the shared template (no HTML is
+  written by Claude). Open questions are self-checked offline against the key points.
+- Optional git versioning of the quiz workspace: asked once and remembered per
+  installation in `~/.config/study-quiz/config.json`; commits each new/changed quiz,
+  auto-pushes when a remote exists, keeps `attempts.json` out of git.
+- Generated workspace `README.md` index of all quizzes.
+- `app/sq.py` helper CLI (`workspace`, `config`, `check`, `build`, `index`,
+  `init-repo`, `save`) with `quiz.json` validation.
+- Skill commands: `git on|off`, `init-repo [remote]`, `config`.
+
+### Changed
+- `server/` renamed to `app/`; shared code moved to `app/common.py`.
+- Workspace can also be set with the `workspace` config key.
+
 ## [0.1.0] - 2026-11-26
 
 ### Added

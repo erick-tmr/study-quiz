@@ -85,6 +85,9 @@ summary { cursor: pointer; color: var(--muted); }
 .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; transform: translateY(-1px); }
 .dot.ok { background: var(--ok); } .dot.partial { background: var(--warn); } .dot.bad { background: var(--bad); } .dot.skip { background: var(--border); }
 .err { color: var(--bad); }
+.checks { display: grid; gap: 6px; margin: 8px 0; font-size: 14px; }
+.checks label { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; }
+.checks input { margin-top: 4px; accent-color: var(--accent); }
 code { font-family: var(--mono); font-size: .92em; background: var(--surface-2); padding: 1px 5px; border-radius: 5px; }
 kbd { font: 12px var(--mono); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; }
 @media (max-width: 480px) { .card { padding: 16px; } .prompt { font-size: 17px; } .stats { grid-template-columns: 1fr 1fr 1fr; } }
@@ -92,8 +95,14 @@ kbd { font: 12px var(--mono); border: 1px solid var(--border); border-bottom-wid
 </head>
 <body>
 <main id="app"><p class="muted">Loading…</p></main>
+<script id="quiz-data" type="application/json">null</script>
 <script>
 "use strict";
+// Standalone mode: the quiz is embedded by `sq.py build` (opened as a file, on GitHub
+// Pages, etc.). Open answers are then self-checked; Claude grading needs the local server.
+const EMBEDDED = JSON.parse(document.getElementById("quiz-data").textContent || "null");
+const OFFLINE = !!EMBEDDED;
+const SERVER_URL = "http://localhost:8765";
 const $app = document.getElementById("app");
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const shuffle = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
@@ -141,7 +150,7 @@ function start(questions) {
 function shell(inner) {
   const n = S.order.length, pct = n ? (S.i / n) * 100 : 0;
   $app.innerHTML = `
-    <header class="top"><h1>${esc(S.quiz.title)}</h1><a href="/">All quizzes</a></header>
+    <header class="top"><h1>${esc(S.quiz.title)}</h1>${OFFLINE ? "" : `<a href="/">All quizzes</a>`}</header>
     <div class="progress" aria-hidden="true"><i style="width:${pct}%"></i></div>
     ${inner}`;
 }
@@ -164,7 +173,7 @@ function renderCard() {
       <div id="fb"></div>
       <div class="row"><span class="small muted" id="hint"><kbd>Ctrl</kbd>+<kbd>Enter</kbd> to submit</span><span class="spacer"></span>
         <button class="btn" id="skip">Skip</button>
-        <button class="btn primary" id="grade">Grade with Claude</button>
+        <button class="btn primary" id="grade">${OFFLINE ? "Check my answer" : "Grade with Claude"}</button>
         <button class="btn primary" id="next" hidden>Next →</button></div></section>`);
     const ta = document.getElementById("ans");
     ta.focus();
@@ -190,13 +199,14 @@ function answerMC(q, k) {
   document.getElementById("fb").innerHTML = `<div class="feedback ${correct ? "ok" : "bad"}">
     <h3>${correct ? "Correct" : "Not quite"}</h3>${q.explanation ? `<p>${esc(q.explanation)}</p>` : ""}</div>`;
   const nb = document.getElementById("next"); nb.hidden = false; nb.focus();
-  api("/api/attempt", { slug: S.quiz.slug, qid: q.id, choice: k }).catch(() => {});
+  if (!OFFLINE) api("/api/attempt", { slug: S.quiz.slug, qid: q.id, choice: k }).catch(() => {});
 }
 
 async function answerOpen(q) {
   const ta = document.getElementById("ans"), gb = document.getElementById("grade"), fb = document.getElementById("fb");
   const answer = ta.value.trim();
   if (!answer || gb.disabled) return;
+  if (OFFLINE) return selfCheck(q);
   gb.disabled = true; ta.readOnly = true; document.getElementById("skip").hidden = true;
   const t0 = Date.now();
   fb.innerHTML = `<div class="feedback"><span class="spinner"></span> <span id="tick">Claude is grading your answer… 0s</span></div>`;
@@ -226,6 +236,26 @@ async function answerOpen(q) {
   }
 }
 
+// Offline: show the reference answer and let the student tick the key points they covered.
+function selfCheck(q) {
+  const ta = document.getElementById("ans"), gb = document.getElementById("grade"), fb = document.getElementById("fb");
+  gb.hidden = true; ta.readOnly = true; document.getElementById("skip").hidden = true; document.getElementById("hint").hidden = true;
+  const kps = q.key_points || [];
+  fb.innerHTML = `<div class="feedback">
+    <h3>Self-check</h3>
+    <p class="small muted">Tick each key point your answer covers.</p>
+    <div class="checks">${kps.map((k, i) => `<label><input type="checkbox" data-i="${i}"> ${esc(k)}</label>`).join("")}</div>
+    ${q.reference_answer ? `<details open><summary>Reference answer</summary><p>${esc(q.reference_answer)}</p></details>` : ""}
+    <p class="small muted">For Claude grading, open <code>${SERVER_URL}/quiz/${esc(S.quiz.slug)}</code> with the server running.</p>
+  </div>`;
+  const nb = document.getElementById("next"); nb.hidden = false;
+  nb.addEventListener("click", () => {
+    const hit = fb.querySelectorAll("input:checked").length;
+    const score = kps.length ? Math.round((hit / kps.length) * 100) : 0;
+    S.results[q.id] = { status: score >= 80 ? "ok" : score >= 40 ? "partial" : "bad", score };
+  }, { capture: true, once: true });
+}
+
 function renderSummary() {
   const rs = S.order.map(q => ({ q, r: S.results[q.id] || { status: "skip" } }));
   const count = s => rs.filter(x => x.r.status === s).length;
@@ -244,7 +274,9 @@ function renderSummary() {
       <button class="btn" id="again">Restart all</button>
       ${missed.length ? `<button class="btn primary" id="retry">Retry ${missed.length} missed</button>` : ""}
     </div>
-    <p class="small muted">To study weak spots, ask Claude Code: <code>/study-quiz:quiz from mistakes ${esc(S.quiz.slug)}</code></p>
+    <p class="small muted">${OFFLINE
+      ? `Offline copy. For Claude grading and saved progress, run the study-quiz server and open <code>${SERVER_URL}/quiz/${esc(S.quiz.slug)}</code>.`
+      : `To study weak spots, ask Claude Code: <code>/study-quiz:quiz from mistakes ${esc(S.quiz.slug)}</code>`}</p>
   </section>`);
   document.getElementById("again").addEventListener("click", () => start(S.quiz.questions));
   const rb = document.getElementById("retry"); if (rb) rb.addEventListener("click", () => start(missed));
@@ -256,8 +288,11 @@ document.addEventListener("keydown", e => {
   if (q && q.type === "mc" && !S.results[q.id] && /^[1-8]$/.test(e.key) && +e.key <= q.options.length) answerMC(q, +e.key - 1);
 });
 
-const m = location.pathname.match(/^\/quiz\/([^/]+)\/?$/);
-m ? renderQuizPage(decodeURIComponent(m[1])) : renderIndex();
+if (EMBEDDED) { S.quiz = EMBEDDED; document.title = `${S.quiz.title} · Study Quiz`; start(S.quiz.questions); }
+else {
+  const m = location.pathname.match(/^\/quiz\/([^/]+)\/?$/);
+  m ? renderQuizPage(decodeURIComponent(m[1])) : renderIndex();
+}
 </script>
 </body>
 </html>

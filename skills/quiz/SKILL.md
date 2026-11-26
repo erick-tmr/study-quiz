@@ -1,25 +1,53 @@
 ---
 name: quiz
-description: Generate a study quiz (multiple-choice flashcards plus open-ended questions graded by Claude) from a topic, notes, files or URLs, and serve it as an interactive local HTML page. Use when the user wants to study, review or test themselves on something, or asks for flashcards, a quiz, practice questions or exam prep. Also "quiz from mistakes <slug>" to target weak spots from past attempts.
-argument-hint: <topic | notes path | url> [n=10] [mix=6mc/4open] | from mistakes <slug>
-version: 0.1.0
+description: Generate a study quiz (multiple-choice flashcards plus open-ended questions graded by Claude) from a topic, notes, files or URLs, and serve it as an interactive local HTML page, optionally versioned in a git repo. Use when the user wants to study, review or test themselves on something, or asks for flashcards, a quiz, practice questions or exam prep. Also "from mistakes <slug>" to target weak spots, and "git on|off" / "init-repo" to manage quiz versioning.
+argument-hint: <topic | notes path | url> [n=10] [mix=6mc/4open] | from mistakes <slug> | git on|off | init-repo [remote]
+version: 0.2.0
 ---
 
 # Generate a study quiz
 
 Arguments: `$ARGUMENTS`
 
+You write **only `quiz.json` and `sources/`**. Never write HTML. The helper
+`sq.py` turns the quiz into a page from the shared template, keeps the index, and
+handles git.
+
 ## 1. Resolve paths
 
-- **Workspace**: `$STUDY_QUIZ_DIR` if set, else `~/study-quizzes`. Get the absolute
-  path with
-  `python3 -c 'import os;print(os.path.abspath(os.path.expanduser(os.environ.get("STUDY_QUIZ_DIR") or "~/study-quizzes")))'`
-  and create it if it doesn't exist.
 - **Plugin root**: `${CLAUDE_PLUGIN_ROOT}`. If that is empty, use two directories
-  above this skill's base directory (`<base>/../..`). The server is at
-  `<plugin root>/server/server.py`.
+  above this skill's base directory (`<base>/../..`).
+- **Helper**: `SQ="python3 <plugin root>/app/sq.py"`.
+- **Workspace**: run `$SQ workspace`. It prints the absolute path, using
+  `STUDY_QUIZ_DIR`, then the config, then `~/study-quizzes`. Create the folder if
+  it doesn't exist.
 
-## 2. Work out what to quiz on
+## 2. Settings commands (handle these and stop)
+
+- `git on` → `$SQ config git true`. If the workspace isn't a repo yet, continue
+  with `init-repo`.
+- `git off` → `$SQ config git false`. Nothing else changes; an existing repo is
+  left as it is.
+- `init-repo [remote-url]` → `$SQ init-repo [--remote URL]`. If the user wants a
+  GitHub remote but has no URL, offer to create a **private** repo with
+  `gh repo create <name> --private` and confirm the name first. Never make it
+  public unless they ask.
+- `config` → show `$SQ config`.
+
+## 3. Git preference (once per installation)
+
+Read `$SQ config git`:
+- `true` / `false`: respect it silently.
+- `null` (never asked): **ask the user once**, before generating: "Do you want
+  your quizzes versioned in a git repo at `<workspace>`? Each new quiz gets a
+  commit, a browsable README index, and an automatic push if the repo has a
+  remote. Answer history stays local." Then:
+  - yes → `$SQ init-repo` (plus the remote offer from step 2)
+  - no → `$SQ config git false`
+
+  Mention that `/study-quiz:quiz git on|off` changes it later.
+
+## 4. Work out what to quiz on
 
 - Arguments can be a topic, file paths, a folder, URLs, or a mix, plus optional
   `n=<count>` (default 10) and `mix=<mc>mc/<open>open` (default about 60% MC).
@@ -34,24 +62,18 @@ Arguments: `$ARGUMENTS`
   those ideas again from **new angles** (rephrased, different scenario), not the
   same questions. Copy the original `sources/`.
 
-## 3. Create the quiz folder
+## 5. Create the quiz folder
 
 Pick a short kebab-case slug (`[a-z0-9-]`, ≤ 40 chars). If the slug already
 exists, add `-2`, `-3`, and so on. Never overwrite another quiz.
 
-```
-<workspace>/<slug>/
-  sources/      # the study material the grader will consult
-  quiz.json
-```
+Put the material into `<workspace>/<slug>/sources/` as Markdown or text: copy the
+user's notes, or save cleaned extracts of fetched pages with the URL at the top.
+For a bare topic, write `sources/overview.md`: a concise, accurate study summary
+covering every concept the quiz tests. The grader relies on these files, so they
+must contain the facts that back each answer.
 
-Put the material into `sources/` as Markdown or text: copy the user's notes, or
-save cleaned extracts of fetched pages with the URL at the top. For a bare topic,
-write `sources/overview.md`: a concise, accurate study summary covering every
-concept the quiz tests. The grader relies on these files, so they must contain
-the facts that back each answer.
-
-## 4. Write quiz.json
+## 6. Write `<workspace>/<slug>/quiz.json`
 
 ```json
 {
@@ -83,25 +105,28 @@ Quality rules:
   not recall of a single word. 2–5 `key_points`, each one independently gradable
   idea. Together they define a full-score answer.
 - Mix difficulties. Ids are `q1…qN` in order.
-- Validate the result: `python3 -m json.tool <file> > /dev/null`.
 
-## 5. Serve it
+## 7. Save
+
+Run `$SQ save <slug>`. It validates `quiz.json` (fix any errors it reports and
+run it again), writes the standalone page `<slug>/index.html`, regenerates the
+workspace `README.md`, and, if git is on, commits and pushes when a remote
+exists. Report what it printed about git, including any push failure.
+
+## 8. Serve it
 
 Check for a running server with `curl -s localhost:8765/api/health`:
 - It answers with `"app": "study-quiz"` and the same `workspace`: reuse it.
 - Nothing answers: start it in the background (keep it running, don't wait on it):
-  ```
-  python3 "<plugin root>/server/server.py" --workspace "<workspace>"
-  ```
+  `python3 "<plugin root>/app/server.py" --workspace "<workspace>"`
 - Something else answers, or a study-quiz server for a different workspace: start
   one with `--port 8766` (or the next free port), use that port in the URL, and
   tell the user why.
 
-Then tell the user:
-- the URL `http://localhost:8765/quiz/<slug>`
-- how many MC and open questions there are
-- that open answers are graded by Claude through their own Claude Code login
-  (about 15–40s each, using their plan's usage), with the grader model set by
-  `STUDY_QUIZ_GRADER_MODEL` (default `sonnet`)
-- that after a session, `/study-quiz:quiz from mistakes <slug>` builds a review
-  quiz.
+Then tell the user, briefly:
+- the URL `http://localhost:8765/quiz/<slug>` (Claude grades open answers there,
+  about 15–40s each, on their own Claude Code login; the model is set by
+  `STUDY_QUIZ_GRADER_MODEL`, default `sonnet`)
+- the offline page `<workspace>/<slug>/index.html` (open answers are self-checked)
+- the MC/open question counts, and the git result
+- that `/study-quiz:quiz from mistakes <slug>` builds a review quiz after a session

@@ -8,6 +8,10 @@ files or URLs into an interactive study quiz:
   missed, feedback, and what to re-read, checked against your own study material.
 - **Review loop**: past attempts are saved, and `from mistakes` builds a new quiz
   that targets your weak spots.
+- **Standalone pages**: every quiz also gets a self-contained `index.html` that
+  works offline (open questions are self-checked against the key points).
+- **Optional git versioning**: keep your quizzes in a git repo with a browsable
+  index. Each new quiz is committed, and pushed when the repo has a remote.
 
 Everything runs locally through **your own Claude Code login**. Quiz generation
 happens in your Claude Code session, and grading runs headless `claude -p` in the
@@ -39,6 +43,7 @@ Update later with `/plugin marketplace update study-quiz`.
 /study-quiz:quiz ~/notes/biology/cell-cycle.md n=15
 /study-quiz:quiz https://en.wikipedia.org/wiki/Raft_(algorithm) mix=4mc/4open
 /study-quiz:quiz from mistakes tcp-basics
+/study-quiz:quiz git on            # or: git off, init-repo <remote-url>, config
 ```
 
 Claude writes the quiz, starts the local server if it isn't running, and gives you a
@@ -48,27 +53,45 @@ type open answers in your own words. Grading takes about 15–40 seconds per ans
 You can also run the server yourself:
 
 ```
-python3 ~/.claude/plugins/…/study-quiz/server/server.py   # path shown by /plugin
+python3 ~/.claude/plugins/cache/study-quiz/study-quiz/<version>/app/server.py
 ```
 
 ## Where things live
 
 ```
-~/study-quizzes/            # override with STUDY_QUIZ_DIR
+~/study-quizzes/            # override with STUDY_QUIZ_DIR or the "workspace" config key
+  README.md                 # generated index of all quizzes
   <slug>/
     sources/                # the material the quiz (and the grader) is based on
     quiz.json               # questions, answers, reference answers, key points
-    attempts.json           # your answers and grades, appended by the server
+    index.html              # standalone page (generated from the template)
+    attempts.json           # your answers and grades, appended by the server (never committed)
 ```
 
-Your quizzes and answers stay in this folder. Edit `quiz.json` by hand if a question
-is wrong.
+Claude writes only `quiz.json` and `sources/`. Pages are stamped from one shared
+template by `app/sq.py`, so they stay small and consistent, and Claude spends no
+tokens on HTML. If you edit a `quiz.json` by hand, run `python3 <plugin>/app/sq.py save <slug>`.
+
+## Versioning your quizzes (optional)
+
+The first time you generate a quiz, the skill asks whether to keep your quizzes in
+git and remembers the answer in `~/.config/study-quiz/config.json`. That file belongs
+to this installation and survives plugin updates.
+
+- **On**: the workspace becomes a git repo (`.gitignore` excludes `attempts.json`).
+  Every new or changed quiz gets a commit like `quiz: add tcp-basics — TCP basics`,
+  and the commit is pushed automatically if the repo has a remote. The generated
+  `README.md` makes the repo easy to browse on GitHub.
+- **Off**: nothing touches git.
+- Change it anytime: `/study-quiz:quiz git on|off`. Add a remote:
+  `/study-quiz:quiz init-repo git@github.com:you/my-quizzes.git` (the skill can also
+  create a private GitHub repo for you with `gh`).
 
 ## Configuration
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `STUDY_QUIZ_DIR` | `~/study-quizzes` | Quiz workspace |
+| `STUDY_QUIZ_DIR` | config `workspace`, else `~/study-quizzes` | Quiz workspace |
 | `STUDY_QUIZ_GRADER_MODEL` | `sonnet` | Model alias used for grading (`haiku` is faster, `opus` more nuanced; `""` uses your Claude Code default) |
 | `STUDY_QUIZ_PORT` | `8765` | Server port |
 | `STUDY_QUIZ_CLAUDE` | `claude` on `PATH` | Path to the Claude Code binary |
@@ -83,7 +106,7 @@ is wrong.
    follows the [`grade` skill](skills/grade/SKILL.md).
 3. The grader reads the question, the relevant `sources/` and your earlier attempts.
    It marks each key point as hit or missed, and returns JSON that matches
-   [`grade.schema.json`](server/grade.schema.json).
+   [`grade.schema.json`](app/grade.schema.json).
 4. The server appends the result to `attempts.json` and the page shows it.
 
 Grading uses your Claude plan's usage, like any other Claude Code message. The
