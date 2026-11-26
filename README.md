@@ -12,8 +12,9 @@ files or URLs into an interactive study quiz:
   works offline (open questions are self-checked against the key points).
 - **Optional git versioning**: keep your quizzes in a git repo with a browsable
   index. Each new quiz is committed, and pushed when the repo has a remote.
-- **Study groups**: one workspace (and optionally one repo) per subject, such as
-  `ai-engineer` or `networking`. Switch between them with a single command.
+- **Study groups → topics → quizzes**: one workspace (and optionally one GitHub
+  repo, public or private) per subject, such as `ai-engineer`. Inside it, topics such
+  as `rag` and `evals` each hold several quizzes.
 
 Everything runs locally through **your own Claude Code login**. Quiz generation
 happens in your Claude Code session, and grading runs headless `claude -p` in the
@@ -41,16 +42,16 @@ Update later with `/plugin marketplace update study-quiz`.
 ## Usage
 
 ```
-/study-quiz:quiz the TCP three-way handshake and congestion control
-/study-quiz:quiz ~/notes/biology/cell-cycle.md n=15
-/study-quiz:quiz https://en.wikipedia.org/wiki/Raft_(algorithm) mix=4mc/4open
-/study-quiz:quiz from mistakes tcp-basics
-/study-quiz:quiz group ai-engineer # create or switch study group; `groups` lists them
-/study-quiz:quiz git on            # or: git off, init-repo <remote-url>, config
+/study-quiz:quiz group ai-engineer           # create (asks: git? GitHub? public/private?) or switch
+/study-quiz:quiz prompt caching strategies    # picks or proposes a topic, writes the quiz
+/study-quiz:quiz ~/notes/rag.md topic=rag n=15
+/study-quiz:quiz https://arxiv.org/abs/2005.11401 topic=rag mix=4mc/4open
+/study-quiz:quiz from mistakes rag/chunking-basics
+/study-quiz:quiz groups | topics | topic evals | git on|off | config
 ```
 
 Claude writes the quiz, starts the local server if it isn't running, and gives you a
-link like `http://localhost:8765/quiz/tcp-basics`. Open it, answer the questions, and
+link like `http://localhost:8765/quiz/rag/chunking-basics`. Open it, answer the questions, and
 type open answers in your own words. Grading takes about 15–40 seconds per answer.
 
 You can also run the server yourself:
@@ -62,13 +63,16 @@ python3 ~/.claude/plugins/cache/study-quiz/study-quiz/<version>/app/server.py
 ## Where things live
 
 ```
-~/study-quizzes/            # override with STUDY_QUIZ_DIR or the "workspace" config key
-  README.md                 # generated index of all quizzes
-  <slug>/
-    sources/                # the material the quiz (and the grader) is based on
-    quiz.json               # questions, answers, reference answers, key points
-    index.html              # standalone page (generated from the template)
-    attempts.json           # your answers and grades, appended by the server (never committed)
+~/study-quizzes/                  # root for study groups ("workspace" config key)
+  ai-engineer/                    # a study group: its own workspace and (optional) repo
+    README.md                     # generated index, grouped by topic
+    rag/                          # a topic
+      topic.json                  # {"title": "Retrieval-augmented generation", "description": …}
+      chunking-basics/            # a quiz (key: rag/chunking-basics)
+        sources/                  # the material the quiz (and the grader) is based on
+        quiz.json                 # questions, answers, reference answers, key points
+        index.html                # standalone page (generated from the template)
+        attempts.json             # your answers and grades (never committed)
 ```
 
 Claude writes only `quiz.json` and `sources/`. Pages are stamped from one shared
@@ -78,13 +82,18 @@ tokens on HTML. If you edit a `quiz.json` by hand, run `python3 <plugin>/app/sq.
 ## Study groups
 
 A study group is a separate quiz workspace for one subject, with its own optional git
-repo:
+repo. Creating one asks whether to version it, whether to create a GitHub repo
+(via `gh`), the repo name, and whether it should be **public or private**:
 
 ```
 /study-quiz:quiz group ai-engineer      # create (in ~/study-quizzes/ai-engineer) or switch
 /study-quiz:quiz groups                 # list; * marks the active group
 /study-quiz:quiz group none             # back to the top-level workspace
+/study-quiz:quiz topics                 # topics in the active group
 ```
+
+Within a group, each quiz goes into a topic. The skill reuses a matching topic or
+proposes a new one, or you can pick it with `topic=<name>`.
 
 New quizzes go to the active group. The local server follows the active group live,
 so switching needs no restart. Each group has its own git preference and remote,

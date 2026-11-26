@@ -81,24 +81,68 @@ def set_git(value: bool) -> None:
 
 
 # ------------------------------------------------------------------ quizzes
+# Layout inside a workspace (study group):
+#   <topic>/topic.json            optional {"title", "description"}
+#   <topic>/<slug>/quiz.json      a quiz; its key is "<topic>/<slug>"
+#   <slug>/quiz.json              legacy flat quiz; key "<slug>"
 
-def load_quiz(ws: Path, slug: str) -> dict | None:
-    if not SLUG_RE.match(slug):
+KEY_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}(/[a-z0-9][a-z0-9-]{0,63})?$")
+
+
+def quiz_dir(ws: Path, key: str) -> Path | None:
+    if not KEY_RE.match(key):
+        return None
+    d = ws / key
+    return d if (d / "quiz.json").is_file() else None
+
+
+def load_quiz(ws: Path, key: str) -> dict | None:
+    d = quiz_dir(ws, key)
+    if not d:
         return None
     try:
-        return json.loads((ws / slug / "quiz.json").read_text())
+        return json.loads((d / "quiz.json").read_text())
     except (OSError, json.JSONDecodeError):
         return None
 
 
+def _subdirs(p: Path):
+    if p.is_dir():
+        for d in sorted(p.iterdir()):
+            if d.is_dir() and not d.name.startswith(".") and SLUG_RE.match(d.name):
+                yield d
+
+
 def iter_quizzes(ws: Path):
-    if not ws.is_dir():
-        return
-    for d in sorted(ws.iterdir()):
-        if d.is_dir():
+    """Yield (key, quiz) for every quiz, flat (legacy) or inside a topic."""
+    for d in _subdirs(ws):
+        if (d / "quiz.json").is_file():
             q = load_quiz(ws, d.name)
             if q:
                 yield d.name, q
+            continue
+        for sub in _subdirs(d):
+            key = f"{d.name}/{sub.name}"
+            q = load_quiz(ws, key)
+            if q:
+                yield key, q
+
+
+def topic_meta(ws: Path, topic: str) -> dict:
+    try:
+        meta = json.loads((ws / topic / "topic.json").read_text())
+        meta = meta if isinstance(meta, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        meta = {}
+    meta.setdefault("title", topic.replace("-", " ").capitalize())
+    return meta
+
+
+def iter_topics(ws: Path):
+    """Yield (topic, meta) for every topic folder (a folder that is not itself a quiz)."""
+    for d in _subdirs(ws):
+        if not (d / "quiz.json").is_file():
+            yield d.name, topic_meta(ws, d.name)
 
 
 def validate_quiz(q: dict) -> list[str]:
